@@ -1,0 +1,31 @@
+# Enforces the plan gate: an implementation change must be covered by the
+# "Files that change" manifest in plan.md (docs/playbook.md explains why).
+#
+# Deliberately PR-only. Direct commits to main are the maintainer's call; the
+# gate exists to make agent-authored changes prove they match an approved plan.
+name: plan-sync
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  plan-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # three-dot diff needs the merge base
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check plan.md covers the diff
+        run: |
+          python scripts/check_plan_sync.py \
+            --base "origin/${{ github.base_ref }}" \
+            --head "${{ github.sha }}"
+      - name: Test the gate itself
+        run: python -m unittest tests.test_check_plan_sync -v

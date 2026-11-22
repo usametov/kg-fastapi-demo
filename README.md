@@ -24,6 +24,28 @@ The service is stateless and follows the [Twelve-Factor App](https://12factor.ne
 > `app/graph/neo4j_client.py`. Compare the prompts in `app/agents/prompts.py` with your notebooks
 > and adjust them if your version differs.
 
+## Documentation
+
+This repo follows an intent → spec → plan → code loop, so humans and agents work
+from the same artifacts. Start at the top and stop when you have what you need:
+
+| Document | Answers |
+|---|---|
+| [intent.md](intent.md) | Why this exists, who it is for, what success means, what is out of scope |
+| [docs/spec/spec.md](docs/spec/spec.md) | The design gate — index to the three design documents |
+| [docs/playbook.md](docs/playbook.md) | How the SDLC loop runs here: five gates, why the plan gate is a script |
+| [AGENTS.md](AGENTS.md) | Commands, conventions, guardrails and the definition of done (for agents and people) |
+| [plan.md](plan.md) | The current milestone and the file manifest CI enforces |
+| [docs/vocabulary.md](docs/vocabulary.md) | L4–L8 and graph vocabulary, with the synonyms to avoid |
+| [knative/README.md](knative/README.md) | Cluster deployment: build, secrets, smoke test, troubleshooting |
+
+The design lives in three documents with different readers:
+[docs/spec/product-design.md](docs/spec/product-design.md) (journey and UX),
+[docs/spec/functional-design.md](docs/spec/functional-design.md) (behavior and
+contracts), [docs/spec/technical-design.md](docs/spec/technical-design.md)
+(architecture and NFRs). Decisions are recorded as immutable
+[ADRs](docs/spec/adr/).
+
 ---
 
 ## Project layout
@@ -70,8 +92,13 @@ kg-fastapi-demo/
 │   └── reset_graph.py          # admin: wipe graph + constraints (--yes)
 ├── data/                       # sample CSVs + product_reviews/*.md (see data/README.md)
 ├── tests/                      # pytest; LLM and Neo4j are mocked; optional real-Neo4j test
+├── docs/                       # intent/spec/playbook/vocabulary + ADRs (see Documentation)
 ├── knative/                    # cluster deployment guide + manifests (see knative/README.md)
 ├── ui/                         # React chat UI (spec now; implementation pending)
+├── intent.md                   # why this exists
+├── plan.md                     # current milestone + file manifest enforced by CI
+├── AGENTS.md                   # repo memory for agents (CLAUDE.md points here)
+├── REVIEW.md                   # review policy: severities, nit cap, checklist
 ├── Dockerfile                  # separate build and run stages
 ├── docker-compose.yml          # neo4j (+APOC), redis, api, worker
 ├── requirements.txt            # pinned runtime deps
