@@ -101,7 +101,7 @@ Verified against the npm registry on **2026-11-22**. Pin these; commit the lockf
 │  /jobs/{id}           → existing (polled)                         │
 │  AdkAgentRunner.run_stream() → ADK partial events                 │
 └───────────────────────────────────────────────────────────────────┘
-             │ Redis (sessions, jobs, owner index)   │ Neo4j (Aura or in-cluster)
+             │ Redis (sessions, jobs, owner index)   │ Neo4j 5.26+ (self-managed)
              ▼                                       ▼
         worker Deployment (JOB_RUNNER=worker) ── consumes Redis queue
 ```
@@ -440,9 +440,13 @@ generic and reusable.
 | `kg-fastapi-demo` | Knative **Service** (API + static SPA) | Same origin, scale-to-zero, one image |
 | `kg-fastapi-worker` | Kubernetes **Deployment** (always ≥1) | Knative Services need HTTP; a queue consumer must not scale to zero mid-build |
 | `redis` | Deployment/StatefulSet or managed | Sessions, jobs, owner index, queue |
-| `neo4j` | **Neo4j Aura** (recommended) or in-cluster StatefulSet | Scale-to-zero app + stateful DB is a bad pairing; Aura keeps the cluster stateless |
+| `neo4j` | **Self-managed** StatefulSet, 5.26+, APOC | The CSV build uses `LOAD CSV … "file:///…"`, which reads Neo4j's own import dir; **Aura does not support `file:///`**. Aura is only viable after switching the loader to `https://` URLs. See `knative/README.md` §6.1 and Appendix A |
 
 ### 17.2 Service spec (key fields)
+
+The **committed** manifests in [`knative/service.yaml`](../knative/service.yaml) already match today's
+code. This is the target shape after M1/M6 land — `AUTH_MODE` and `UI_DIST_DIR` appear only when those
+features exist:
 
 ```yaml
 apiVersion: serving.knative.dev/v1
@@ -453,8 +457,8 @@ spec:
   template:
     metadata:
       annotations:
-        autoscaling.knative.dev/minScale: "0"      # "1" for the demo cluster
-        autoscaling.knative.dev/maxScale: "5"      # bounds LLM spend
+        autoscaling.knative.dev/min-scale: "0"     # "1" for a live demo
+        autoscaling.knative.dev/max-scale: "5"     # bounds LLM spend
         autoscaling.knative.dev/target: "10"       # concurrency per pod
     spec:
       timeoutSeconds: 300          # SSE turns must finish inside this
@@ -462,13 +466,12 @@ spec:
       containers:
         - image: ghcr.io/usametov/kg-fastapi-demo:latest
           ports: [{ containerPort: 8000 }]
-          envFrom: [{ secretRef: { name: kg-secrets } }]
+          envFrom:
+            - configMapRef: { name: kg-fastapi-demo-config }
+            - secretRef: { name: kg-fastapi-demo-secrets }
           env:
-            - { name: ENVIRONMENT, value: prod }
-            - { name: STATE_BACKEND, value: redis }
-            - { name: JOB_RUNNER, value: worker }
-            - { name: AUTH_MODE, value: cookie }
-            - { name: UI_DIST_DIR, value: /app/ui/dist }
+            - { name: AUTH_MODE, value: cookie }        # M1 (not yet in config.py)
+            - { name: UI_DIST_DIR, value: /app/ui/dist } # M6 (static SPA)
           startupProbe:   { httpGet: { path: /health, port: 8000 }, failureThreshold: 30, periodSeconds: 2 }
           readinessProbe: { httpGet: { path: /health/ready, port: 8000 }, periodSeconds: 5 }
           livenessProbe:  { httpGet: { path: /health, port: 8000 }, periodSeconds: 20 }
@@ -493,22 +496,25 @@ spec:
   set `minScale: 1` for demos you are presenting live.
 - **Static assets:** hashed `/assets/*` with `Cache-Control: public, max-age=31536000, immutable`;
   `index.html` with `no-store` so a new deploy is picked up immediately.
-- **Secrets** use the existing README pattern (`kubectl create secret generic kg-secrets …`);
-  commit only `deploy/knative/secret.example.yaml` with placeholder values.
+- **Secrets** are created with `kubectl create secret generic kg-fastapi-demo-secrets …`;
+  only `knative/secret.example.yaml` (placeholders) is committed.
 
-### 17.4 Manifests to add
+### 17.4 Manifests (already in the repo)
 
 ```text
-deploy/knative/
-├── kustomization.yaml
-├── service.yaml          # API + UI
-├── worker.yaml           # Deployment (1 replica)
-├── redis.yaml            # or point REDIS_URL at managed Redis
-└── secret.example.yaml   # placeholders only, never real values
+knative/
+├── README.md             # full deployment guide (build, config, verify, troubleshooting)
+├── kustomization.yaml    # namespace kg-demo; excludes secret.example.yaml
+├── configmap.yaml        # every non-secret env var from app/config.py
+├── service.yaml          # Knative Service: API (+ UI once built), port 8000, probes
+├── worker.yaml           # Deployment (1 replica) for python -m app.worker
+└── secret.example.yaml   # OPENAI_API_KEY / NEO4J_PASSWORD placeholders - never applied
 ```
 
-`deploy/knative/README.md` documents: build/push the image, create the secret, `kubectl apply -k`,
-get the URL, and the first-run smoke test (`/health`, `/health/ready`, `/`).
+`knative/README.md` documents: prerequisites, multi-arch build/push, the full env-var table,
+secret creation, `kubectl apply -k knative/`, the LLM-free smoke test, dependency requirements
+(including the `file:///` LOAD CSV constraint on Neo4j), scale-to-zero behavior, and troubleshooting.
+The UI work only adds `UI_DIST_DIR=/app/ui/dist` to the ConfigMap and the static mount in `app/main.py`.
 
 ### 17.5 Image and CI
 
@@ -553,7 +559,7 @@ no API key, using the existing `app/domain/defaults.py` plan.
 kg-fastapi-demo/
 ├── app/                          # FastAPI (existing) + chat.py, auth.py, static.py
 ├── tests/fixtures/*.sse          # golden stream transcripts (shared by pytest + Vitest)
-├── deploy/knative/               # §17.4
+├── knative/                      # deployment guide + manifests (see §17)
 ├── ui/
 │   ├── SPEC.md                   # this document
 │   ├── package.json
@@ -576,7 +582,8 @@ kg-fastapi-demo/
    demo-password cookie flow first?
 2. **Retention** — keep `SESSION_TTL_SECONDS=86400` for the public demo, or extend to 7 days so
    history feels real?
-3. **Neo4j** — Aura instance for the public demo, or in-cluster StatefulSet?
+3. **Neo4j** — self-managed StatefulSet is required for the current `file:///` CSV build; is switching
+   the loader to `https://` URLs (enabling Aura) in scope for the demo, or deferred?
 4. **`minScale`** — 0 (cheapest, cold starts) or 1 for the demo window?
 5. **Brand** — Neo4j-ish palette, or neutral shadcn default with a graph-green accent?
 6. **Build progress transport** — polling in M3 (planned), or spend the extra day on SSE

@@ -1,0 +1,102 @@
+# Knative Service for the API.
+#
+#   kubectl apply -k knative/
+#
+# Configuration comes from kg-fastapi-demo-config (ConfigMap) and
+# kg-fastapi-demo-secrets (Secret). Every env var here is one that
+# app/config.py actually reads; see knative/README.md for the full table.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: kg-fastapi-demo
+  labels:
+    app.kubernetes.io/name: kg-fastapi-demo
+    app.kubernetes.io/part-of: kg-fastapi-demo
+    app.kubernetes.io/component: api
+spec:
+  # --- traffic (optional: tagged revisions for staging / canary) ----------
+  # Uncomment to keep the last known-good revision reachable while testing a
+  # new one. Percentages must sum to 100.
+  # traffic:
+  #   - latestRevision: true
+  #     percent: 100
+  #   - latestRevision: true
+  #     percent: 0
+  #     tag: staging          # https://staging-kg-fastapi-demo.<your-domain>
+
+  template:
+    metadata:
+      annotations:
+        # Scale to zero: cheapest. Set min-scale "1" for a live demo so the
+        # first chat turn doesn't eat a 2-5s Python/ADK cold start.
+        autoscaling.knative.dev/min-scale: "0"
+        # Hard cap on concurrent LLM work. Each open SSE/request holds a slot,
+        # so max-scale x containerConcurrency is your real concurrency budget.
+        autoscaling.knative.dev/max-scale: "5"
+        autoscaling.knative.dev/target: "10"
+    spec:
+      # Knative's request timeout, including a streaming response. A single
+      # agent turn must finish inside this; long builds already go through the
+      # job path (POST /build -> 202 -> poll /jobs/{id}).
+      timeoutSeconds: 300
+      containerConcurrency: 10
+
+      # Only needed for a private registry:
+      # imagePullSecrets:
+      #   - name: ghcr-pull-secret
+
+      containers:
+        - name: api
+          # Replace with your registry. Multi-arch build instructions are in
+          # knative/README.md (the Mac mini cluster is arm64).
+          image: ghcr.io/usametov/kg-fastapi-demo:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http1
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: kg-fastapi-demo-config
+            - secretRef:
+                name: kg-fastapi-demo-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              # Google ADK + LiteLLM import a lot; 1Gi is a safe ceiling for
+              # the demo workload. Raise if you see OOMKilled on schema turns.
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # To also set readOnlyRootFilesystem: true, mount emptyDir at /tmp
+            # and make /home/app writable; LiteLLM/ADK write small caches.
+
+          # Liveness must stay dependency-free: a Neo4j blip must not restart
+          # pods. /health performs no I/O.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 2
+            failureThreshold: 30        # up to 60s to boot
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 20
+            timeoutSeconds: 3
+          # Readiness checks Neo4j + the state store and returns 503 when
+          # either is unreachable, so a pod leaves rotation instead of 500ing.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3

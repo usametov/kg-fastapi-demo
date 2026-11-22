@@ -1,0 +1,13 @@
+# Apply with:  kubectl apply -k knative/
+#
+# secret.example.yaml is deliberately NOT listed here: a plain
+# `kubectl apply -f knative/` would also apply the placeholder Secret and
+# overwrite your real one. Create the Secret once (see README) and let this
+# kustomization manage only the non-secret objects.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: kg-demo
+resources:
+  - configmap.yaml
+  - service.yaml
+  - worker.yaml

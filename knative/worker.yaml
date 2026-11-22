@@ -1,0 +1,62 @@
+# Build worker - a plain Deployment, NOT a Knative Service.
+#
+# Why: Knative Services must serve HTTP traffic and may scale to zero. This
+# process is a Redis queue consumer (`python -m app.worker`); if it scaled to
+# zero, queued builds would sit forever, and if the API pod handled the build
+# itself (JOB_RUNNER=inprocess) a scale-down would kill a multi-minute job.
+#
+# It reuses the same image and the same ConfigMap/Secret as the API:
+# configmap.yaml already sets STATE_BACKEND=redis and JOB_RUNNER=worker, which
+# is exactly what app/worker.py requires (it exits if STATE_BACKEND != redis).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-fastapi-demo-worker
+  labels:
+    app.kubernetes.io/name: kg-fastapi-demo-worker
+    app.kubernetes.io/part-of: kg-fastapi-demo
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 1
+  # Recreate avoids two pods racing a rollout; a rolling update with
+  # maxUnavailable: 0 would also work since workers just BRPOP from Redis.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kg-fastapi-demo-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kg-fastapi-demo-worker
+        app.kubernetes.io/part-of: kg-fastapi-demo
+        app.kubernetes.io/component: worker
+    spec:
+      # Must exceed the longest build. The worker traps SIGTERM, finishes the
+      # current job, then exits; SIGKILL would leave the job stuck "running".
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: ghcr.io/usametov/kg-fastapi-demo:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "app.worker"]
+          envFrom:
+            - configMapRef:
+                name: kg-fastapi-demo-config
+            - secretRef:
+                name: kg-fastapi-demo-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # No HTTP server, so no probe. A worker that is alive but stuck on a
+          # hung LLM call shows as healthy; check logs and the job status.

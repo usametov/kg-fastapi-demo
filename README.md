@@ -70,6 +70,8 @@ kg-fastapi-demo/
 │   └── reset_graph.py          # admin: wipe graph + constraints (--yes)
 ├── data/                       # sample CSVs + product_reviews/*.md (see data/README.md)
 ├── tests/                      # pytest; LLM and Neo4j are mocked; optional real-Neo4j test
+├── knative/                    # cluster deployment guide + manifests (see knative/README.md)
+├── ui/                         # React chat UI (spec now; implementation pending)
 ├── Dockerfile                  # separate build and run stages
 ├── docker-compose.yml          # neo4j (+APOC), redis, api, worker
 ├── requirements.txt            # pinned runtime deps
@@ -223,42 +225,28 @@ stays fast and stateless. The included worker uses a plain Redis list (`BRPOP`).
 killed hard, that job stays `running`. For guaranteed redelivery, move to Redis Streams with
 acks, or to RQ, Arq or Celery.
 
-## Deploying to your Knative / Kind cluster (Mac mini)
+## Deploying to a cluster (Knative)
 
-You already have `kn quickstart kind` running. Here is a minimal path:
+`docker compose` stays the fast local loop. The cluster path — multi-arch image build and push,
+ConfigMap/Secret wiring for every setting in `app/config.py`, the Knative Service and worker
+manifests, scale-to-zero behavior, the Neo4j import-directory requirement, the smoke test and
+troubleshooting — lives in **[knative/README.md](knative/README.md)**.
 
 ```bash
-# 1) Build and load the image straight into Kind (no registry needed for dev.local/)
-docker build -t dev.local/kg-api:0.1.0 .
-kind load docker-image dev.local/kg-api:0.1.0 --name knative
-
-# 2) Backing services: plain Deployments/Services (or point at Neo4j Aura / managed Redis)
-kubectl create secret generic kg-secrets \
-  --from-literal=OPENAI_API_KEY=sk-... --from-literal=NEO4J_PASSWORD=please-change-me
-#   e.g. helm install neo4j neo4j/neo4j --set neo4j.password=please-change-me ... (enable APOC)
-#   and  kubectl create deployment redis --image=redis:7-alpine && kubectl expose deployment redis --port 6379
-
-# 3) The API as a Knative Service (Knative injects $PORT; the app already binds it)
-kn service create kg-api --image dev.local/kg-api:0.1.0 \
-  --env NEO4J_URI=bolt://neo4j.default.svc.cluster.local:7687 \
-  --env STATE_BACKEND=redis --env REDIS_URL=redis://redis.default.svc.cluster.local:6379/0 \
-  --env JOB_RUNNER=worker \
-  --env-from secret:kg-secrets \
-  --scale-min 0 --scale-max 5
-curl http://kg-api.default.127.0.0.1.sslip.io/health
-
-# 4) The worker as a normal Deployment (it must not scale to zero mid-job)
-kubectl create deployment kg-worker --image=dev.local/kg-api:0.1.0 -- python -m app.worker
-kubectl set env deployment/kg-worker --from=secret/kg-secrets \
-  NEO4J_URI=bolt://neo4j.default.svc.cluster.local:7687 STATE_BACKEND=redis \
-  REDIS_URL=redis://redis.default.svc.cluster.local:6379/0
+kubectl create namespace kg-demo
+# create the real Secret first (knative/README.md §4.3), then:
+kubectl apply -k knative/
+BASE=$(kn service describe kg-fastapi-demo -n kg-demo -o url)
+curl -s "$BASE/health" | jq
 ```
 
-Notes:
-- With scale-to-zero, **always use `STATE_BACKEND=redis` + `JOB_RUNNER=worker`**. In-memory state and in-process builds vanish when the pod goes away.
-- The CSVs must be in **Neo4j's** import directory for `LOAD CSV`. Bake them into a custom Neo4j image or mount a volume. The API image already contains `data/` for the agents.
-- Point a liveness probe at `/health` and a readiness probe at `/health/ready`.
-- If you ran the quickstart with `--host-port 8080`, add `:8080` to the sslip.io URL.
+Two invariants on Knative, both already set in [`knative/configmap.yaml`](knative/configmap.yaml):
+
+- **`STATE_BACKEND=redis`** — in-memory sessions vanish when the API pod scales to zero.
+- **`JOB_RUNNER=worker`** — an in-process build dies with the pod, so the worker runs as a plain
+  Deployment that never scales to zero.
+
+If your Knative quickstart used `--host-port 8080`, append `:8080` to the sslip.io URL.
 
 ## Assumptions, gaps and differences from the notebooks
 
