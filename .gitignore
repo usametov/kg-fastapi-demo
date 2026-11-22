@@ -3,3 +3,7 @@
 __pycache__/
 .pytest_cache/
 *.zip
+
+# ui/ (Vite SPA) - build output and deps are not committed
+node_modules/
+ui/dist/
