@@ -1,0 +1,71 @@
+# Same services in dev and prod-like runs (Twelve-Factor X: dev/prod parity).
+# Backing services are attached resources addressed purely by env vars.
+#
+#   cp .env.example .env    # add OPENAI_API_KEY
+#   docker compose up --build
+#   open http://localhost:8000/docs   (Neo4j browser: http://localhost:7474)
+
+x-app-env: &app-env
+  ENVIRONMENT: ${ENVIRONMENT:-dev}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  NEO4J_URI: bolt://neo4j:7687
+  NEO4J_USERNAME: neo4j
+  NEO4J_PASSWORD: ${NEO4J_PASSWORD:-please-change-me}
+  NEO4J_DATABASE: neo4j
+  LLM_MODEL: ${LLM_MODEL:-openai/gpt-4o}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  STATE_BACKEND: redis
+  REDIS_URL: redis://redis:6379/0
+  JOB_RUNNER: ${JOB_RUNNER:-worker}
+  DATA_DIR: /app/data
+
+services:
+  neo4j:
+    image: neo4j:5.26-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-please-change-me}
+      NEO4J_PLUGINS: '["apoc"]'            # L8 entity resolution uses apoc.text.jaroWinklerDistance
+      NEO4J_server_directories_import: /import
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    ports: ["7474:7474", "7687:7687"]
+    volumes:
+      - ./data:/import:ro                  # LOAD CSV "file:///products.csv" reads from here
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 10s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+
+  api:
+    build: .
+    environment:
+      <<: *app-env
+      PORT: 8000
+    ports: ["8000:8000"]
+    volumes:
+      - ./data:/app/data:ro                # same files the agents sample and Neo4j imports
+    depends_on:
+      neo4j: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    stop_grace_period: 25s                 # lifespan closes drivers on SIGTERM
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment: *app-env
+    volumes:
+      - ./data:/app/data:ro
+    depends_on:
+      neo4j: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    stop_grace_period: 60s                 # let a running build finish
+
+volumes:
+  neo4j-data:

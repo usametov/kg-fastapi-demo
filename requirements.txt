@@ -1,0 +1,16 @@
+# Runtime dependencies, pinned exactly (Twelve-Factor II: explicit dependencies).
+# Resolved and tested together on Python 3.12/3.13 on 2026-11-21.
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
+pydantic-settings==2.16.3
+python-dotenv==1.2.4
+neo4j==6.4.1
+redis==8.1.0
+anyio==4.16.0
+google-adk==2.15.0
+# Keep LiteLLM below 1.82.7 (1.82.7/1.82.8 were compromised on PyPI in 2026);
+# same upper bound as the course's companion repo.
+litellm==1.82.6
+neo4j-graphrag[openai]==1.24.0
+openai==3.57.0
