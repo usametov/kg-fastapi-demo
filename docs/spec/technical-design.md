@@ -54,6 +54,46 @@ Pinned for reproducibility (see `requirements.txt`): `fastapi==0.165.0`,
 | `app/config.py` | The entire configuration surface |
 | `ui/` | Vite SPA (M0+) |
 
+### 2.1 FastAPI surface
+
+`app/main.py` contains **no endpoints**: it builds the application. Every route
+lives in `app/routers/`, one router per stage. The table is the complete list of
+FastAPI features the service relies on, so their presence (or absence) is
+deliberate rather than accidental.
+
+| Feature | Where | Why |
+|---|---|---|
+| App factory `create_app(settings=None)` | `main.py` | Tests build an isolated app with overridden settings; the module-level `app = create_app()` keeps `uvicorn app.main:app` working |
+| `lifespan` async context manager | `main.py` | Replaces `@app.on_event` (deprecated since FastAPI 0.93): startup creates the attached-resource clients, the code after `yield` closes them on SIGTERM |
+| `app.state` singletons | `main.py`, `deps.py` | One Neo4j driver / state store / runner / file catalog per process, created once and handed out by dependencies — no module-level globals to leak between tests |
+| `@app.middleware("http")` + `call_next` | `main.py` | One JSON access-log line per request and an `x-request-id` echoed back to the client |
+| `APIRouter` + `include_router` | `routers/*` | Endpoints grouped by lesson in `/docs`; each router importable and testable on its own |
+| `Annotated[..., Depends(...)]` aliases | `deps.py` | `graph: GraphDep` reads like a type; `app.dependency_overrides` swaps any of them in tests. The recommended style since FastAPI 0.95 |
+| Path-param dependency `get_session_or_404` | `deps.py` | `{session_id}` resolves to a `SessionRecord` or a 404 in exactly one place |
+| Pydantic v2 models + `response_model` | `domain/models.py`, routers | Request validation (422 with details), response filtering, and the OpenAPI schema come from one definition |
+| Discriminated union (`Field(discriminator=...)`) | `domain/models.py` | `Construction` selects `NodeConstruction`/`RelationshipConstruction` from `construction_type` |
+| `Literal` fields | `domain/models.py` | `phase`, `named`, `mode`, `status` are constrained by the type, not by a comment |
+| `Body(default_factory=...)` | `routers/schema.py`, `build.py` | Optional request body without a mutable default argument |
+| `Query(...)` constraints | `routers/schema.py`, `query.py` | `limit` bounds (`ge=1, le=1000`) and `use_default` flags, validated and documented |
+| `HTTPException` with explicit status codes | routers, `_common.py` | Stable error contract: 409 gate, 422 invalid, 502 upstream failure, 400 write-Cypher |
+| `status.HTTP_202_ACCEPTED` / `HTTP_201_CREATED` | `routers/build.py`, `sessions.py` | The status code is part of the contract, not a default |
+| `BackgroundTasks` | `routers/build.py` | Return 202 immediately, run the build after the response (`JOB_RUNNER=inprocess`) |
+| `JSONResponse` with `status_code=503` | `routers/health.py` | Readiness needs a body *and* a non-2xx status |
+| `anyio.to_thread.run_sync` | `routers/query.py`, `health.py` | The Neo4j driver is synchronous; keep it off the event loop |
+| `python -m app` → `uvicorn.run` | `__main__.py` | Twelve-Factor VII: the app binds `$HOST:$PORT` itself |
+| OpenAPI (`/docs`, `/openapi.json`) | automatic | Free, accurate, and the source the frontend types are checked against |
+
+**Not used — and that is deliberate:**
+
+- `StreamingResponse` / `EventSourceResponse`: arrives with the SSE chat endpoint (M1).
+- OAuth2 / `Security` dependencies: arrives with `AUTH_MODE` (M1).
+- `on_event` (superseded by `lifespan`), WebSockets, `FileResponse`/uploads.
+
+**Version note.** `fastapi==0.165.0` is pinned, but nothing above is
+bleeding-edge: `lifespan` and `Annotated` dependencies have been the documented
+style since 0.93/0.95. If `main.py` looks unfamiliar, the likely reason is that it
+is an *app factory with no routes*, not a newer API.
+
 ## 3. Data model
 
 ```python

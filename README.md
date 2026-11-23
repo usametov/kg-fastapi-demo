@@ -220,13 +220,9 @@ curl -s -XPOST $B/query -H "$J" -d '{"question":"Which suppliers provide parts f
 
 ### Why each FastAPI feature is used
 
-- **`APIRouter`**: one router per stage of the workflow, so each lesson's endpoints live together and show up grouped in `/docs`.
-- **Pydantic models**: validate requests (bad input returns 422 automatically), define stable response shapes (`NodeConstruction`/`RelationshipConstruction` use a discriminated union), and generate the OpenAPI docs.
-- **`Depends` / `Annotated` dependencies**: the Neo4j wrapper, state store, agent runner, file catalog and settings are injected, not global, so tests swap them through `dependency_overrides` or `app.state`. `SessionDep` resolves `{session_id}` and returns 404 in one place.
-- **`lifespan`**: creates the clients once at startup and closes them on shutdown (graceful SIGTERM).
-- **`BackgroundTasks`**: the build can take minutes, so the endpoint returns 202 right away and the client polls `/jobs/{id}`.
-- **HTTP middleware**: one JSON access-log line per request, with an `x-request-id`.
-- **`response_model`** keeps internals (such as the job payload snapshot) out of responses.
+`app/main.py` has no endpoints — it is an app factory; the routes live in `app/routers/`.
+The complete catalogue of FastAPI features we use, why, and what we deliberately do not use
+yet is in [docs/spec/technical-design.md §2.1](docs/spec/technical-design.md#21-fastapi-surface).
 
 ## Twelve-Factor
 
