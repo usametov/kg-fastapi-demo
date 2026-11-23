@@ -106,6 +106,43 @@ kubectl create namespace kg-demo
 `kustomization.yaml` targets `kg-demo`; `kubectl apply -k` does not create
 namespaces, so this step is required.
 
+### 2.1 Namespaces — and why the Secret must land in the same one
+
+A namespace is a naming and administrative scope inside the cluster. Everything
+this guide creates — the ConfigMap, the Knative Service, the worker Deployment and
+the Secret — belongs in `kg-demo`, and must be in the **same** namespace as the
+pods that consume it.
+
+Why one namespace rather than `default`:
+
+- **Names are scoped to it.** You can run `kg-demo` and a future `kg-staging` with
+  identical object names and no collision, which is what makes an environment
+  pair possible without renaming anything.
+- **Short DNS names resolve inside it.** The ConfigMap's `bolt://neo4j:7687` and
+  `redis://redis:6379/0` work because those Services are in the same namespace.
+  Crossing namespaces requires the fully qualified name
+  (`neo4j.kg-demo.svc.cluster.local`).
+- **Cleanup is one command.** `kubectl delete namespace kg-demo` removes the
+  whole deployment; deleting objects one by one always leaves something behind.
+- **RBAC and quota attach to it.** A CI identity can be limited to `kg-demo`, and
+  a `ResourceQuota` there caps CPU, memory and object counts for this demo only.
+- **Blast radius.** A mistaken `kubectl delete -n kg-demo` cannot touch anything
+  else in the cluster.
+
+What bites in practice: a Secret created **without** `-n kg-demo` lands in
+`default`, where the pods cannot see it — `envFrom` never crosses namespaces. The
+revision then fails with `CreateContainerConfigError` and
+`kubectl -n kg-demo get secret` shows nothing. Recreate it in `kg-demo` (§4.3).
+
+Two related details:
+
+- `kubectl apply -f knative/service.yaml` ignores kustomize's `namespace:` and
+  uses the **current context's** namespace. Either always use `-k`, or set
+  `kubectl config set-context --current --namespace=kg-demo` once.
+- A namespace is an administrative boundary, not a network one: pods in different
+  namespaces can still reach each other unless a `NetworkPolicy` says otherwise.
+  For real isolation, add a default-deny `NetworkPolicy` plus RBAC.
+
 ## 3. Build and push the image
 
 The image contains the API *and* the worker; the entrypoint decides which
@@ -444,7 +481,7 @@ the same image and the same config run in both places.
 | `LOAD CSV` file-not-found | CSVs not in **Neo4j's** `/import` | Mount `data/` at `/import` (§6.1, Appendix A) |
 | `Unknown function 'apoc…'` | APOC not installed | `NEO4J_PLUGINS='["apoc"]'`, restart Neo4j |
 | Request times out around 5 min | `timeoutSeconds` (300) hit on a long turn | Ship long work through `/build`; or raise `timeoutSeconds` (cluster max is usually 600) |
-| `CreateContainerConfigError` | Secret or ConfigMap name mismatch | `kubectl -n kg-demo get secret,configmap` |
+| `CreateContainerConfigError` | Secret or ConfigMap name mismatch, or created in another namespace | `kubectl -n kg-demo get secret,configmap`; recreate the Secret with `-n kg-demo` (§2.1) |
 | App listens on the wrong port | `PORT` set in the ConfigMap overriding Knative's injection | Remove `PORT` from the ConfigMap |
 
 ## 11. Cleanup
