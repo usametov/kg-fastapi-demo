@@ -59,6 +59,7 @@ PROCESS_ENTRIES = (
     "SECURITY.md",
     "CHANGELOG.md",
     "ui/SPEC.md",               # retired: pointer to docs/spec
+    "knative/README.md",        # deployment docs; manifests below are NOT exempt
     "scripts/check_plan_sync.py",
     "tests/test_check_plan_sync.py",
 )

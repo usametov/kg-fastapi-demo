@@ -19,7 +19,7 @@ rather than in the process. Nothing in `app/` needs to change to deploy here.
 | `service.yaml` | yes (via kustomize) | Knative **Service** for the API: image, port 8000, probes, autoscaling |
 | `worker.yaml` | yes (via kustomize) | Plain **Deployment** for `python -m app.worker` |
 | `kustomization.yaml` | — | Lists the three above and pins the namespace; excludes the Secret template |
-| `secret.example.yaml` | **no** | Template for `OPENAI_API_KEY` / `NEO4J_PASSWORD`. Create the real Secret yourself |
+| `secret.example.yaml` | **no — reference only** | Shows which keys exist. Never fill it in or keep a real Secret in this folder; create it with `kubectl` (§4.3) |
 
 Apply everything with:
 
@@ -131,24 +131,77 @@ Both are consumed with `envFrom`, so every key becomes an environment variable.
 An explicit `env:` entry would override `envFrom`; this stack deliberately does
 not set either, so there is exactly one source per key.
 
-### 4.3 Create the Secret
+### 4.3 Create the Secret — you never need a `secret.yaml` here
 
-Recommended (nothing sensitive touches a file):
+`secret.example.yaml` is a **reference for which keys exist**, not a step. Do not
+fill it in and keep it in `knative/`: the directory is one `git add -A` away from
+publishing a live key, and `kubectl apply -f knative/` would apply it (which is
+exactly why `kustomization.yaml` excludes it).
+
+All three options below create the same `kg-fastapi-demo-secrets` object. Pick one.
+
+**Option A — no file (recommended).** The key is prompted for, so it never reaches
+your shell history:
 
 ```bash
+read -rsp "OpenAI API key: " OPENAI_API_KEY; echo
 kubectl -n kg-demo create secret generic kg-fastapi-demo-secrets \
-  --from-literal=OPENAI_API_KEY="$(cat ~/.openai-key)" \
+  --from-literal=OPENAI_API_KEY="$OPENAI_API_KEY" \
   --from-literal=NEO4J_PASSWORD="$(openssl rand -hex 24)"
+unset OPENAI_API_KEY
 ```
 
-Or from a local env file that is git-ignored:
+**Option B — an env file outside the repo.** Convenient when you rotate often:
+
+```bash
+printf 'OPENAI_API_KEY=\nNEO4J_PASSWORD=%s\n' "$(openssl rand -hex 24)" \
+  > ~/kg-secrets.env
+chmod 600 ~/kg-secrets.env
+$EDITOR ~/kg-secrets.env      # paste the key here; it stays out of shell history
+kubectl -n kg-demo create secret generic kg-fastapi-demo-secrets \
+  --from-env-file="$HOME/kg-secrets.env"
+```
+
+Keep it outside the repository. If it must live inside, add its exact name to
+`.gitignore` *before* creating it — the existing `.env` pattern does not cover
+`kg-secrets.env`.
+
+**Option C — a manifest file outside the repo.** Copy the template to a scratch
+location, fill it, and apply that path explicitly:
+
+```bash
+cp knative/secret.example.yaml ~/kg-secrets.yaml
+$EDITOR ~/kg-secrets.yaml
+kubectl apply -f ~/kg-secrets.yaml
+```
+
+Never `cp` the filled-in file into `knative/`.
+
+**Re-running / updating.** `create` fails when the Secret already exists:
 
 ```bash
 kubectl -n kg-demo create secret generic kg-fastapi-demo-secrets \
-  --from-env-file=./kg-secrets.env
+  --from-literal=OPENAI_API_KEY=... --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Re-running a failed `create` is easiest with `--dry-run=client -o yaml | kubectl apply -f -`.
+**Verify without printing values.** `-o yaml` shows base64, which is plaintext
+with extra steps:
+
+```bash
+kubectl -n kg-demo get secret kg-fastapi-demo-secrets
+kubectl -n kg-demo get secret kg-fastapi-demo-secrets -o jsonpath='{.data}' | jq -r 'keys[]'
+```
+
+**After changing a value, restart the consumers.** `envFrom` is read at container
+start, so an edited Secret does not propagate:
+
+```bash
+kubectl -n kg-demo rollout restart deploy/kg-fastapi-demo-worker
+kubectl -n kg-demo delete pod -l serving.knative.dev/service=kg-fastapi-demo
+```
+
+If the Secret is missing entirely, the revision fails with
+`CreateContainerConfigError` — the `secretRef` is not optional.
 
 ### 4.4 Volume mounts (not supported today)
 
@@ -160,8 +213,14 @@ not a requirement for this deployment.
 
 ## 5. Deploy and verify
 
+Three steps, in this order — the Secret is read when the container starts, so it
+must exist before the revision is created:
+
 ```bash
-kubectl apply -k knative/
+kubectl create namespace kg-demo          # 1. namespace (kustomize won't create it)
+# 2. the Secret, §4.3 — e.g. the Option A one-liner
+kubectl apply -k knative/                 # 3. ConfigMap + Service + worker
+
 kubectl -n kg-demo get ksvc,deploy,pods
 kn service list -n kg-demo
 kn service describe kg-fastapi-demo -n kg-demo

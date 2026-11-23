@@ -157,6 +157,18 @@ class PlanSyncTest(unittest.TestCase):
         res = self.repo.check(base, head)
         self.assertEqual(res.returncode, 0, res.stderr)
 
+    def test_knative_readme_exempt_but_manifests_are_not(self) -> None:
+        base = self._base(["app/main.py"])
+        self.repo.write("knative/README.md", "# docs edit\n")
+        head = self.repo.commit()
+        self.assertEqual(self.repo.check(base, head).returncode, 0)
+
+        self.repo.write("knative/service.yaml", "kind: Service\n")
+        head2 = self.repo.commit()
+        res = self.repo.check(head, head2)
+        self.assertEqual(res.returncode, 1)
+        self.assertIn("knative/service.yaml", res.stderr)
+
     def test_staging_without_plan_fails_in_hook_mode(self) -> None:
         base = self._base(["app/main.py"])
         self.repo.write("app/other.py", "y = 1\n")

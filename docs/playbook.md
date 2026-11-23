@@ -88,8 +88,9 @@ and its tests.
 
 Everything else — `app/`, `ui/` (except `ui/SPEC.md`), `tests/`, `scripts/`,
 `knative/` manifests, `data/`, `Dockerfile`, dependency files — needs a manifest
-entry. `knative/README.md` is documentation but sits beside manifests; it is not
-exempt, deliberately, so deployment changes are always planned.
+entry. `knative/README.md` **is** exempt (it is documentation, and punishing a doc
+clarification is how docs rot); the manifests beside it are not, so deployment
+changes are always planned.
 
 ## 5. Definition of done
 
