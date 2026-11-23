@@ -561,6 +561,10 @@ spec:
 
 Notes:
 
+- **Apply it into `kg-demo`.** The snippet carries no `namespace:`, so
+  `kubectl apply -f neo4j.yaml` lands in your current context's namespace —
+  usually `default`. Use `kubectl -n kg-demo apply -f neo4j.yaml`, otherwise
+  `bolt://neo4j:7687` will not resolve from the API pods (§2.1).
 - `$(NEO4J_PASSWORD)` expansion requires the variable to be declared *before*
   `NEO4J_AUTH` in the same `env` list — that is why the order matters.
 - Change the password if you ever expose Bolt outside the cluster; the
