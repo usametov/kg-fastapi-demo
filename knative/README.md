@@ -27,9 +27,62 @@ Apply everything with:
 kubectl apply -k knative/
 ```
 
-Do **not** run `kubectl apply -f knative/`. That applies every YAML in the
-directory, including `secret.example.yaml`, and would overwrite your real
-Secret with `REPLACE_ME` placeholders. That is why `kustomization.yaml` exists.
+Do **not** run `kubectl apply -f knative/`. `-f` treats every YAML in the
+directory as a Kubernetes resource: it will try to apply `secret.example.yaml`
+(placeholders that would replace your real Secret) *and* `kustomization.yaml`
+itself, which is a build config rather than a resource. The command therefore
+either errors or does the wrong thing. `-k` reads an explicit allowlist instead.
+
+### 1.1 Why `kustomization.yaml`?
+
+Kubernetes does not require it; three explicit files would also work:
+
+```bash
+kubectl apply -f knative/configmap.yaml \
+              -f knative/service.yaml \
+              -f knative/worker.yaml
+```
+
+The kustomization earns its place for four reasons:
+
+1. **An allowlist instead of a directory scan.** Only the listed resources are
+   applied, so a template, a scratch manifest, or a future `secret.yaml` can sit
+   in the folder without any chance of being applied by the deploy command.
+2. **One namespace.** `namespace: kg-demo` is stamped onto every namespaced
+   resource, so the manifests stay namespace-free (portable, copy-pasteable) and
+   there is exactly one place to change the target. Running
+   `kubectl apply -f knative/service.yaml` directly would silently deploy to
+   `default`.
+3. **A stable command.** `kubectl apply -k knative/` does not change when files
+   are added, renamed or split. A `-f` list must be maintained by hand and is
+   easy to run in an incomplete form.
+4. **A home for transformations.** Pinning the image tag once
+   (`images:`), shared labels, or a generated ConfigMap go here later without
+   editing `service.yaml` and `worker.yaml` separately.
+
+What it does **not** do:
+
+- **It does not create the namespace.** Run `kubectl create namespace kg-demo`
+  first, or `apply -k` fails.
+- **It does not order applies or wait for readiness.** The Secret must already
+  exist (§4.3) because `envFrom` is read when the container starts.
+- **It does not template.** There is no `${VAR}` substitution from your shell or
+  environment: values live in `configmap.yaml`, and real secrets in a
+  `kubectl`-created Secret (§4.3). This is the most common Helm expectation it
+  does not meet.
+- **It does not manage the Secret.** `secret.example.yaml` is documentation, and
+  is deliberately absent from the `resources:` list.
+
+Preview what it will do:
+
+```bash
+kubectl kustomize knative/     # render the final YAML; no cluster needed
+kubectl diff -k knative/       # what would change on the cluster
+```
+
+`kustomize` is built into `kubectl` (since 1.14), so there is no extra binary to
+install. Helm would add templating and release state that a three-manifest
+deployment does not need; a bare `-f` list would lose the allowlist.
 
 ## 2. Prerequisites
 
